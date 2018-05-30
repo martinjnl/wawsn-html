@@ -27,10 +27,233 @@ Status: <span id="status_field"></span><br>
 Value: <span id="value_field"></span>
 </p>
 <p>
-<textarea id="newProgram" rows="30" cols="80" style="font-family:courier;"></textarea>
+<textarea id="logg" rows="30" cols="40" style="font-family:courier;"></textarea>
 </p>
 
+<script>
+
+var SEGMENT_MAXLEN = 18;
+
+var waBLEDevice;
+var waServer;
+var waService;
+var waChar1;
 
 
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function logMessage(msg) {
+    document.getElementById("logg").value += msg.toString() + "\n";
+    console.log(msg);
+}
+
+function startBluetooth()
+{
+    logMessage('Requesting Bluetooth Device...');
+
+    navigator.bluetooth.requestDevice({filters: [{services: [0xfff0]}]})
+    .then(device => {
+          logMessage('Connecting to GATT Server...');
+          
+          // Set up event listener for when device gets disconnected.
+          device.addEventListener('gattserverdisconnected', onDisconnected);
+
+          waBLEDevice = device;
+          
+          return device.gatt.connect();
+          })
+    .then(server => {
+          logMessage('Getting Service...');
+          waServer = server;
+          return server.getPrimaryService(0xfff0);
+          })
+    .then(service => {
+          waService = service;
+          return service.getCharacteristic(0xfff1);
+          })
+    .then(characteristic => {
+          waChar1 = characteristic;
+          return waChar1.startNotifications();
+          })
+    .then(_ => {
+          logMessage('> A 2 Notifications started');
+          waChar1.addEventListener('characteristicvaluechanged',
+                                            handleNotifications);
+          document.getElementById("btnConnect").disabled = true;
+          document.getElementById("btnDisconnect").disabled = false;
+          document.getElementById("btnStatus").disabled = false;
+          document.getElementById("btnReset").disabled = false;
+          });
+}
+
+
+function handleNotifications(event)
+{
+    let notificationValue = event.target.value.getUint32(0);
+    logMessage('notification value is ' + notificationValue);
+    document.getElementById("value_field").innerHTML = notificationValue;
+}
+
+function onDisconnected(event)
+{
+    let device = event.target;
+    console.log('Device ' + device.name + ' is disconnected.');
+    document.getElementById("btnConnect").disabled = false;
+    document.getElementById("btnDisconnect").disabled = true;
+    document.getElementById("btnStatus").disabled = true;
+    document.getElementById("btnReset").disabled = true;
+}
+    
+function start()
+{
+   startBluetooth();
+}
+
+
+function stop()
+{
+   if (waChar1) {
+       waChar1.stopNotifications()
+       .then(_ => {
+             logMessage('> Notifications stopped');
+             waChar1.removeEventListener('characteristicvaluechanged',
+                                                  handleNotifications);
+             waBLEDevice.gatt.disconnect();
+             })
+        .catch(error => {
+               logMessage('Argh! ' + error);
+               });
+  }
+}
+
+function status2txt(s)
+{
+    let status = s >> 24;
+    let exitstatus = (s >> 16) & 0xFF;
+    let interval = s & 0xFFFF;
+    
+    if (status == 0) {
+        return "Resetted";
+    } else if (status == 1) {
+        return "Running, interval = " + interval;
+    }
+    return "Terminated, exit code = " + exitstatus;
+}
+
+function getStatus()
+{
+    waService.getCharacteristic(0xfff2)
+    .then(characteristic => characteristic.readValue())
+    .then(value => {
+          let status = value.getUint32(0)
+          console.log('getStatus ' + status);
+          document.getElementById("status_field").innerHTML = status2txt(status);
+          })
+    .catch(error => { console.log(error); });
+}
+
+function reset()
+{
+    var resetcmd = Uint8Array.of(0xFE, 0xFF, 0x00);
+    
+    waServer.getPrimaryService(0xfff0)
+    .then(service => service.getCharacteristic(0xfff3))
+    .then(characteristic => characteristic.writeValue(resetcmd))
+    .then(_ => {
+          logMessage('Node resetted.');
+          })
+    .catch(error => { logMessage(error); });
+}
+
+    
+function program(waModuleSegments)
+{
+    var initcmd = Uint8Array.of(0xFE, 0xFF, 0x01);
+    //var writedatacmd = Uint8Array.of(0xEE, 0xEE);
+    var char3;
+   
+    waService.getCharacteristic(0xfff3)
+    .then(characteristic => {
+          char3 = characteristic;
+          logMessage('send set size command');
+          return char3;
+          })
+    .then(_ => {
+          return waModuleSegments.reduce((sequence, segment) => {
+             return sequence.then(_ => sleep(100))
+                            .then(() => { logMessage('loaded segment');})
+                            .then(() => char3.writeValue(segment))
+          }, Promise.resolve())
+          })
+    .then(_ => sleep(100))
+    .then(() => char3.writeValue(initcmd))
+    .then(_ => {
+            logMessage('Sensor initiated.');
+            })
+    .catch(error => { logMessage(error); });
+
+}
+
+function readFileAndProgram(e) {
+    var file = e.target.files[0];
+    
+    if (!file) {
+        return;
+    }
+    var reader = new FileReader();
+    reader.onload = function(e) {
+        var waProgCmdList = [];
+        
+        var fileArray = new Uint8Array(e.target.result);
+        var fileLen = fileArray.length;
+        
+        if (fileLen > (0xFFFF * SEGMENT_MAXLEN)) {
+            logMessage('File too large. ' + fileLen);
+            return;
+        }
+        
+        // Start the segment list with the set file length command
+        var seg = Uint8Array.of(0xFF, 0xFF, fileLen & 0xFF, fileLen>>8);
+        var segs = [seg];
+        
+        var idx = 0;
+        while ((idx * SEGMENT_MAXLEN) < fileLen) {
+            seg = new Uint8Array(SEGMENT_MAXLEN + 2);
+            
+            seg.set(Uint8Array.of(idx & 0xFF, idx >> 8));
+            
+            if (((idx+1) * SEGMENT_MAXLEN) < fileLen)
+                seg.set(fileArray.subarray(idx * SEGMENT_MAXLEN, (idx+1) * SEGMENT_MAXLEN), 2);
+            else {
+                seg = new Uint8Array(2 + fileLen - idx * SEGMENT_MAXLEN);
+                seg.set(Uint8Array.of(idx & 0xFF, idx >> 8));
+                seg.set(fileArray.subarray(idx * SEGMENT_MAXLEN), 2);
+            }
+            
+            segs.push(seg);
+            idx++;
+        }
+        
+        program(segs);
+    };
+    reader.readAsArrayBuffer(file);
+}
+
+
+function init()
+{
+    document.getElementById("btnConnect").disabled = false;
+    document.getElementById("btnDisconnect").disabled = true;
+    document.getElementById("btnStatus").disabled = true;
+    document.getElementById("btnReset").disabled = true;
+    
+    document.getElementById('file-input')
+    .addEventListener('change', readFileAndProgram, false);
+}
+
+
+</script>
 </body>
 </html>
