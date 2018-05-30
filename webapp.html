@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>New HTML5 Gateway</title>
+<style type="text/css">
+    canvas { 
+      border:1px solid black;
+    }
+</style>
+
+
+</head>
+<body onload="init();">
+
+
+<p>
+<button id="btnConnect" onclick="start()">Connect to sensor</button>
+<button id="btnDisconnect" onclick="stop()">Disconnect from sensor</button>
+<button id="btnStatus" onclick="getStatus()">Get Status</button>
+<button id="btnReset" onclick="reset()">Reset sensor</button>
+</p>
+<p>
+Upload WebAssembly Module: <input type="file" id="file-input" />
+</p>
+<p>
+Status: <span id="status_field"></span><br>
+Value: <span id="value_field"></span>
+</p>
+<p>
+<textarea id="newProgram" rows="30" cols="80" style="font-family:courier;"></textarea>
+</p>
+
+
+
+</body>
+</html>
