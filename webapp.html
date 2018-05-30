@@ -99,7 +99,7 @@ function handleNotifications(event)
 function onDisconnected(event)
 {
     let device = event.target;
-    console.log('Device ' + device.name + ' is disconnected.');
+    logMessage('Device ' + device.name + ' is disconnected.');
     document.getElementById("btnConnect").disabled = false;
     document.getElementById("btnDisconnect").disabled = true;
     document.getElementById("btnStatus").disabled = true;
@@ -148,10 +148,10 @@ function getStatus()
     .then(characteristic => characteristic.readValue())
     .then(value => {
           let status = value.getUint32(0)
-          console.log('getStatus ' + status);
+          logMessage('getStatus ' + status);
           document.getElementById("status_field").innerHTML = status2txt(status);
           })
-    .catch(error => { console.log(error); });
+    .catch(error => { logMessage(error); });
 }
 
 function reset()
